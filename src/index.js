@@ -23,8 +23,6 @@ app.use("/vapi", vapiRouter);
 
 app.use((_req, res) => fail(res, 404, "Not found"));
 
-// Last line of defence. Prisma's own constraint errors get mapped to 4xx;
-// anything else is a genuine 500 and is logged with its stack.
 app.use((err, _req, res, _next) => {
   if (err?.type === "entity.parse.failed") return fail(res, 400, "Request body is not valid JSON");
   if (err?.code === "P2002") return fail(res, 409, "A record with those details already exists");

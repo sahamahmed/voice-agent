@@ -7,7 +7,6 @@ export const patientsRouter = Router();
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// GET /patients — list, with the three optional filters from the spec.
 patientsRouter.get(
   "/",
   wrap(async (req, res) => {
@@ -27,7 +26,6 @@ patientsRouter.get(
   }),
 );
 
-// GET /patients/:id
 patientsRouter.get(
   "/:id",
   wrap(async (req, res) => {
@@ -38,7 +36,6 @@ patientsRouter.get(
   }),
 );
 
-// POST /patients — the endpoint the voice agent ultimately drives.
 patientsRouter.post(
   "/",
   wrap(async (req, res) => {
@@ -49,7 +46,6 @@ patientsRouter.post(
   }),
 );
 
-// PUT /patients/:id — partial updates allowed.
 patientsRouter.put(
   "/:id",
   wrap(async (req, res) => {
@@ -64,7 +60,6 @@ patientsRouter.put(
   }),
 );
 
-// DELETE /patients/:id — soft delete, never a hard delete.
 patientsRouter.delete(
   "/:id",
   wrap(async (req, res) => {

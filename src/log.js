@@ -1,5 +1,3 @@
-// Structured JSON to stdout — Railway captures it, so this is the whole
-// observability story without a logging dependency.
 const emit = (level, event, data = {}) =>
   console.log(JSON.stringify({ ts: new Date().toISOString(), level, event, ...data }));
 

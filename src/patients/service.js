@@ -1,8 +1,5 @@
 import { prisma } from "../db.js";
 
-// The only module that knows Prisma exists. The API speaks snake_case, Prisma
-// speaks camelCase; that translation happens here and nowhere else.
-
 const toDb = (input) => ({
   firstName: input.first_name,
   lastName: input.last_name,
@@ -20,10 +17,10 @@ const toDb = (input) => ({
   preferredLanguage: input.preferred_language,
   emergencyContactName: input.emergency_contact_name,
   emergencyContactPhone: input.emergency_contact_phone,
+  vapiCallId: input.vapi_call_id,
   callTranscript: input.call_transcript,
 });
 
-/** Drop keys the caller didn't send, so a PUT never blanks an untouched field. */
 const definedOnly = (obj) =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 
@@ -69,7 +66,6 @@ export const listPatients = async ({ last_name, date_of_birth, phone_number, lim
   return { rows, total };
 };
 
-/** Duplicate detection for returning callers: most recent record on this number. */
 export const findByPhone = (phoneNumber) =>
   prisma.patient.findFirst({
     where: { phoneNumber, deletedAt: null },
@@ -82,9 +78,11 @@ export const updatePatient = async (patientId, input) => {
   return prisma.patient.update({ where: { patientId }, data: definedOnly(toDb(input)) });
 };
 
-/** Soft delete only — the spec is explicit that records are never destroyed. */
 export const softDeletePatient = async (patientId) => {
   const existing = await getPatient(patientId);
   if (!existing) return null;
   return prisma.patient.update({ where: { patientId }, data: { deletedAt: new Date() } });
 };
+
+export const attachTranscript = (vapiCallId, callTranscript) =>
+  prisma.patient.updateMany({ where: { vapiCallId }, data: { callTranscript } });

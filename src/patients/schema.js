@@ -1,12 +1,5 @@
 import { z } from "zod";
 
-// The authority on what a valid patient record is. An LLM will happily accept
-// "my birthday is next Tuesday", so validation never lives in the prompt.
-//
-// Forgiving about format, strict about content: speech arrives in whatever
-// shape the transcriber invented, so normalise here rather than ask the model
-// to be consistent.
-
 const STATES = {
   AL: "alabama", AK: "alaska", AZ: "arizona", AR: "arkansas", CA: "california",
   CO: "colorado", CT: "connecticut", DE: "delaware", FL: "florida", GA: "georgia",
@@ -22,8 +15,6 @@ const STATES = {
   WY: "wyoming", DC: "district of columbia",
 };
 
-/** "California" / "calif ornia" / "ca" -> "CA". Unknown input passes through
- *  unchanged so the enum check below produces the error message, not this. */
 const normaliseState = (raw) => {
   const s = String(raw).trim().toLowerCase();
   if (s.length === 2 && STATES[s.toUpperCase()]) return s.toUpperCase();
@@ -31,13 +22,11 @@ const normaliseState = (raw) => {
   return hit ? hit[0] : String(raw).trim().toUpperCase();
 };
 
-/** Strip formatting a transcriber might invent: "(213) 528-3131", "+1 213...". */
 const normalisePhone = (raw) => {
   const d = String(raw).replace(/\D/g, "");
   return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
 };
 
-/** Accept MM/DD/YYYY (the spec's format) and ISO YYYY-MM-DD (what LLMs emit). */
 const parseDob = (raw) => {
   const s = String(raw).trim();
   const us = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
@@ -47,8 +36,6 @@ const parseDob = (raw) => {
   else if (iso) [, y, m, d] = iso;
   else return null;
   const date = new Date(Date.UTC(+y, +m - 1, +d));
-  // Round-trip check rejects impossible dates that Date silently rolls over,
-  // e.g. 02/30/1990 becoming March 2nd.
   const valid =
     date.getUTCFullYear() === +y &&
     date.getUTCMonth() === +m - 1 &&
@@ -91,9 +78,6 @@ const dateOfBirth = z
     return parsed;
   });
 
-// Optional free-text: treat "", "none", "n/a", null as absent. The agent has a
-// habit of filling a skipped field with a polite placeholder rather than
-// omitting it, and a literal "none" in the insurance column is worse than null.
 const optionalText = (max) =>
   z
     .union([z.string(), z.null()])
@@ -141,8 +125,6 @@ export const createPatientSchema = z.object({
   call_transcript: optionalText(100000),
 });
 
-// PUT allows partial updates, so every field becomes optional — but any field
-// that *is* present still has to survive the same rules as on create.
 export const updatePatientSchema = createPatientSchema.partial();
 
 export const listQuerySchema = z.object({
@@ -153,8 +135,6 @@ export const listQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-/** Flatten a ZodError into [{ field, message }] — the shape the voice agent
- *  needs to know which single field to re-ask the caller about. */
 export const formatIssues = (error) =>
   error.issues.map((i) => ({ field: i.path.join(".") || "body", message: i.message }));
 

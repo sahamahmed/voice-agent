@@ -3,126 +3,123 @@ import { createPatientSchema, updatePatientSchema, formatIssues, normalisePhone 
 import * as service from "../patients/service.js";
 import { log } from "../log.js";
 
-// Vapi POSTs here when the assistant calls a tool, and expects
-// { results: [{ toolCallId, result }] } back. `result` re-enters the model's
-// context as plain text, so it is written to be reasoned over and spoken —
-// which is why failures return an instruction, never a status code.
-//
-// Tools share the REST API's validation and service layer: a record created by
-// phone is checked identically to one created over HTTP.
-
 export const vapiRouter = Router();
 
-/** Shared-secret check. Vapi sends the value configured on the assistant's
- *  server URL as this header. Skipped if unset so local dev stays frictionless. */
 const authorised = (req) => {
   const expected = process.env.VAPI_SECRET;
   if (!expected) return true;
   return req.get("x-vapi-secret") === expected;
 };
 
-const summarise = (p) =>
+const describe = (p) =>
   `${p.firstName} ${p.lastName}, born ${p.dateOfBirth.toISOString().slice(0, 10)}, ` +
-  `living at ${p.addressLine1}${p.addressLine2 ? `, ${p.addressLine2}` : ""}, ${p.city}, ${p.state} ${p.zipCode}`;
+  `phone ${p.phoneNumber}, ${p.addressLine1}${p.addressLine2 ? `, ${p.addressLine2}` : ""}, ` +
+  `${p.city}, ${p.state} ${p.zipCode}`;
+
+const rejection = (issues, retryWith) =>
+  `NOT SAVED. These fields are invalid: ${issues.map((i) => `${i.field} (${i.message})`).join("; ")}. ` +
+  `Ask the caller only about those fields, then call ${retryWith} again with the complete set.`;
 
 const handlers = {
-  /** Bonus: recognise a returning caller before collecting anything. */
   async lookup_patient({ phone_number }) {
-    if (!phone_number) return "No phone number supplied, so no lookup was possible. Continue with a new registration.";
+    if (!phone_number) return "No phone number available. Continue as a new registration.";
+
     const existing = await service.findByPhone(normalisePhone(phone_number));
-    if (!existing) return "No existing record found for this phone number. Proceed with a new registration.";
+    if (!existing) return "No existing record. Continue as a new registration.";
+
     return (
-      `An existing record was found. patient_id is ${existing.patientId}. ` +
-      `Details on file: ${summarise(existing)}. ` +
-      `Tell the caller you already have a record for ${existing.firstName} ${existing.lastName} ` +
-      `and ask whether they would like to update it instead of creating a new one.`
+      `EXISTING RECORD FOUND. patient_id: ${existing.patientId}. On file: ${describe(existing)}. ` +
+      `Greet them by name, say you already have their record, and ask whether they want to update it ` +
+      `or register as a new patient.`
     );
   },
 
-  async register_patient(args) {
+  async register_patient(args, { callId }) {
     const parsed = createPatientSchema.safeParse(args ?? {});
     if (!parsed.success) {
       const issues = formatIssues(parsed.error);
-      log.warn("tool.register_patient.invalid", { issues });
-      return (
-        `The record was NOT saved because some details are invalid: ` +
-        issues.map((i) => `${i.field} — ${i.message}`).join("; ") +
-        `. Apologise briefly, ask the caller only for the field(s) listed, then call register_patient again with everything.`
-      );
+      log.warn("registration.rejected", { call_id: callId, issues });
+      return rejection(issues, "register_patient");
     }
-    const patient = await service.createPatient(parsed.data);
-    log.info("patient.created", { patient_id: patient.patientId, source: "voice" });
+
+    const patient = await service.createPatient({ ...parsed.data, vapi_call_id: callId });
+    log.info("registration.saved", { call_id: callId, patient: service.toApi(patient) });
+
     return (
-      `Saved successfully. The patient_id is ${patient.patientId}. ` +
-      `Confirm to the caller that they are all set, ${patient.firstName}, and end the call warmly.`
+      `SAVED. patient_id: ${patient.patientId}. Tell ${patient.firstName} they are all set ` +
+      `and that their registration is complete, then end the call.`
     );
   },
 
-  async update_patient({ patient_id, ...rest }) {
-    if (!patient_id) return "No patient_id supplied. Call lookup_patient first to find the existing record.";
-    const parsed = updatePatientSchema.safeParse(rest ?? {});
-    if (!parsed.success) {
-      const issues = formatIssues(parsed.error);
-      return (
-        `The update was NOT saved because some details are invalid: ` +
-        issues.map((i) => `${i.field} — ${i.message}`).join("; ") +
-        `. Ask the caller only for those field(s) again, then retry.`
-      );
-    }
+  async update_patient({ patient_id, ...fields }, { callId }) {
+    if (!patient_id) return "No patient_id. Call lookup_patient first.";
+
+    const parsed = updatePatientSchema.safeParse(fields ?? {});
+    if (!parsed.success) return rejection(formatIssues(parsed.error), "update_patient");
+
     const patient = await service.updatePatient(patient_id, parsed.data);
-    if (!patient) return "No patient exists with that patient_id. Treat this as a new registration instead.";
-    log.info("patient.updated", { patient_id: patient.patientId, source: "voice" });
-    return `Updated successfully. Confirm to the caller that their information is up to date, ${patient.firstName}.`;
+    if (!patient) return "No patient with that patient_id. Register them as a new patient instead.";
+
+    log.info("registration.updated", { call_id: callId, patient: service.toApi(patient) });
+    return `UPDATED. Tell ${patient.firstName} their information is up to date, then end the call.`;
   },
 };
 
+const UNAVAILABLE =
+  "The system is temporarily unavailable and nothing was saved. Apologise, tell the caller " +
+  "their details were not recorded, and ask them to call back in a few minutes.";
+
+const runToolCall = async (call, callId) => {
+  const name = call.name ?? call.function?.name;
+  const raw = call.arguments ?? call.function?.arguments ?? {};
+  const args = typeof raw === "string" ? JSON.parse(raw) : raw;
+
+  log.info("tool.called", { call_id: callId, name, args });
+
+  const handler = handlers[name];
+  if (!handler) return { toolCallId: call.id, result: `Unknown tool "${name}".` };
+
+  try {
+    return { toolCallId: call.id, result: await handler(args, { callId }) };
+  } catch (error) {
+    log.error("tool.failed", { call_id: callId, name, error: error.message });
+    return { toolCallId: call.id, result: UNAVAILABLE };
+  }
+};
+
+const onEndOfCall = async (message) => {
+  const callId = message.call?.id;
+  const transcript = message.transcript ?? message.artifact?.transcript;
+
+  log.info("call.ended", {
+    call_id: callId,
+    reason: message.endedReason,
+    duration_seconds: message.durationSeconds,
+    transcript,
+  });
+
+  if (callId && transcript) await service.attachTranscript(callId, transcript);
+};
+
 vapiRouter.post("/webhook", async (req, res) => {
-  if (!authorised(req)) return res.status(401).json({ error: "unauthorized" });
+  if (!authorised(req)) return res.status(401).json({ data: null, error: { message: "Unauthorized" } });
 
   const message = req.body?.message ?? {};
+  const callId = message.call?.id;
 
-  // Observability: persist the transcript of a completed call onto the record
-  // it created, and log the final payload as the spec requires.
-  if (message.type === "end-of-call-report") {
-    log.info("call.ended", {
-      call_id: message.call?.id,
-      ended_reason: message.endedReason,
-      duration_seconds: message.durationSeconds,
-      transcript: message.transcript,
-    });
-    return res.json({ received: true });
+  try {
+    if (message.type === "end-of-call-report") {
+      await onEndOfCall(message);
+      return res.json({ received: true });
+    }
+
+    if (message.type !== "tool-calls") return res.json({ received: true });
+
+    const calls = message.toolCallList ?? message.toolCalls ?? [];
+    const results = await Promise.all(calls.map((call) => runToolCall(call, callId)));
+    return res.json({ results });
+  } catch (error) {
+    log.error("webhook.failed", { call_id: callId, type: message.type, error: error.message });
+    return res.json({ results: [{ toolCallId: req.body?.message?.toolCallList?.[0]?.id, result: UNAVAILABLE }] });
   }
-
-  if (message.type !== "tool-calls") return res.json({ received: true });
-
-  const calls = message.toolCallList ?? message.toolCalls ?? [];
-  const results = await Promise.all(
-    calls.map(async (call) => {
-      const name = call.name ?? call.function?.name;
-      let args = call.arguments ?? call.function?.arguments ?? {};
-      if (typeof args === "string") {
-        try { args = JSON.parse(args); } catch { args = {}; }
-      }
-      log.info("tool.called", { name, call_id: message.call?.id, args });
-
-      const handler = handlers[name];
-      if (!handler) return { toolCallId: call.id, result: `Unknown tool "${name}".` };
-
-      try {
-        return { toolCallId: call.id, result: await handler(args) };
-      } catch (err) {
-        // A database outage must never be silence on the line. The agent is
-        // told, in words, what to say to the caller.
-        log.error("tool.failed", { name, message: err.message });
-        return {
-          toolCallId: call.id,
-          result:
-            "The system could not save the record right now because of a technical problem. " +
-            "Apologise to the caller, tell them their information was not saved, and ask them to call back shortly.",
-        };
-      }
-    }),
-  );
-
-  return res.json({ results });
 });

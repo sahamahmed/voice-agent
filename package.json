@@ -7,7 +7,9 @@
     "dev": "node --env-file=.env --watch src/index.js",
     "start": "prisma migrate deploy && node src/index.js",
     "build": "prisma generate",
-    "test": "node --env-file=.env --test test/"
+    "test": "node --env-file=.env --test test/",
+    "provision": "node --env-file=.env scripts/provision.js",
+    "seed": "node --env-file=.env scripts/seed.js"
   },
   "dependencies": {
     "@prisma/client": "^6.1.0",
