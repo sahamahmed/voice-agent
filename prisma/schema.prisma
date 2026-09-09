@@ -1,0 +1,53 @@
+// Patient demographic schema — mirrors the required data model 1:1.
+// Constraints live here (types, lengths, enum, indexes) so the database is the
+// last line of defence even if a caller somehow bypasses API validation.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Sex {
+  Male
+  Female
+  Other
+  DeclineToAnswer
+}
+
+model Patient {
+  patientId     String    @id @default(uuid()) @map("patient_id") @db.Uuid
+  firstName     String    @map("first_name") @db.VarChar(50)
+  lastName      String    @map("last_name") @db.VarChar(50)
+  dateOfBirth   DateTime  @map("date_of_birth") @db.Date
+  sex           Sex
+  phoneNumber   String    @map("phone_number") @db.VarChar(10)
+  email         String?   @db.VarChar(254)
+
+  addressLine1  String    @map("address_line_1") @db.VarChar(200)
+  addressLine2  String?   @map("address_line_2") @db.VarChar(200)
+  city          String    @db.VarChar(100)
+  state         String    @db.Char(2)
+  zipCode       String    @map("zip_code") @db.VarChar(10)
+
+  insuranceProvider     String? @map("insurance_provider") @db.VarChar(100)
+  insuranceMemberId     String? @map("insurance_member_id") @db.VarChar(50)
+  preferredLanguage     String  @default("English") @map("preferred_language") @db.VarChar(50)
+  emergencyContactName  String? @map("emergency_contact_name") @db.VarChar(100)
+  emergencyContactPhone String? @map("emergency_contact_phone") @db.VarChar(10)
+
+  // Transcript of the call that created the record (bonus: call transcript).
+  callTranscript String? @map("call_transcript")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  // Duplicate detection on inbound calls looks patients up by phone.
+  @@index([phoneNumber])
+  @@index([lastName])
+  @@map("patients")
+}
