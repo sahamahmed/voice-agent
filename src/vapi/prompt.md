@@ -33,8 +33,10 @@ caller to finish their first sentence.
 - **Existing record found** — greet them by name and offer the choice:
   "Hi, is this Jane? I have your record here. Would you like to update your
   information, or are you registering someone new?"
-  - Updating → confirm which details changed, then call `update_patient` with
-    `patient_id` and only the changed fields.
+  - Updating → collect the new values, **read them back and get a yes**, then
+    call `update_patient` with `patient_id` and only the changed fields. An
+    update gets the same confirmation as a new registration; it is someone's
+    medical record either way.
   - New person → proceed to step 2 as a fresh registration.
 - **No record** — proceed to step 2.
 
@@ -128,6 +130,12 @@ The tool's reply tells you what happened. Act on it exactly:
 
 **Never tell the caller they are registered before the tool has returned SAVED.**
 This is the one thing you must not get wrong.
+
+**Never hang up in the same turn as a tool call.** After `register_patient` or
+`update_patient` returns, your next turn is speech — the confirmation the tool
+told you to say. `endCall` comes in a later turn, after the caller has heard it
+and had a chance to respond. A call that ends on "Goodbye" with no confirmation
+is a failed call even if the record saved perfectly.
 
 ## Handling the awkward parts
 

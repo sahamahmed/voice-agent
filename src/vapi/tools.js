@@ -8,6 +8,24 @@ const describe = (p) =>
   `phone ${p.phoneNumber}, ${p.addressLine1}${p.addressLine2 ? `, ${p.addressLine2}` : ""}, ` +
   `${p.city}, ${p.state} ${p.zipCode}`;
 
+const SPOKEN_FIELD = {
+  first_name: "first name",
+  last_name: "last name",
+  date_of_birth: "date of birth",
+  phone_number: "phone number",
+  address_line_1: "street address",
+  address_line_2: "apartment or unit",
+  zip_code: "ZIP code",
+  insurance_provider: "insurance provider",
+  insurance_member_id: "member ID",
+  preferred_language: "preferred language",
+  emergency_contact_name: "emergency contact",
+  emergency_contact_phone: "emergency contact number",
+};
+
+const spokenList = (items) =>
+  items.length <= 1 ? (items[0] ?? "details") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+
 const rejection = (issues, retryWith) =>
   `NOT SAVED. These fields are invalid: ${issues.map((i) => `${i.field} (${i.message})`).join("; ")}. ` +
   `Ask the caller only about those fields, then call ${retryWith} again with the complete set.`;
@@ -27,9 +45,10 @@ const lookupPatient = async ({ phone_number }) => {
   const existing = await patients.findByPhone(normalisePhone(phone_number));
   if (existing) return found(existing);
 
-  const previousId = await calls.findPatientIdByCaller(phone_number);
-  const previous = previousId ? await patients.getPatient(previousId) : null;
-  if (previous) return found(previous);
+  for (const id of await calls.findPatientIdsByCaller(phone_number)) {
+    const previous = await patients.getPatient(id);
+    if (previous) return found(previous);
+  }
 
   return "No existing record. Continue as a new registration.";
 };
@@ -48,8 +67,9 @@ const registerPatient = async (args, { callId }) => {
   if (callId) await calls.linkPatient(callId, patient.patientId);
 
   return (
-    `SAVED. patient_id: ${patient.patientId}. Tell ${patient.firstName} they are all set ` +
-    `and that their registration is complete, then end the call.`
+    `SAVED. patient_id: ${patient.patientId}. Before anything else, say out loud to the caller: ` +
+    `"You're all set, ${patient.firstName} — you're registered with us and we'll see you soon." ` +
+    `Wait for them to reply. Only then say goodbye and use endCall. Do not use endCall in this same turn.`
   );
 };
 
@@ -65,7 +85,14 @@ const updatePatient = async ({ patient_id, ...fields }, { callId }) => {
   log.info("registration.updated", { call_id: callId, patient: patients.toApi(patient) });
   if (callId) await calls.linkPatient(callId, patient.patientId);
 
-  return `UPDATED. Tell ${patient.firstName} their information is up to date, then end the call.`;
+  const changed = spokenList(Object.keys(parsed.data).map((f) => SPOKEN_FIELD[f] ?? f.replace(/_/g, " ")));
+
+  return (
+    `UPDATED (${changed}). Before anything else, say out loud to the caller: ` +
+    `"That's all updated, ${patient.firstName} — I've got your new ${changed} on file." ` +
+    `Then ask if there is anything else they would like to change. Only once they say no ` +
+    `should you say goodbye and use endCall. Do not use endCall in this same turn.`
+  );
 };
 
 export const toolHandlers = {

@@ -1,316 +1,197 @@
 # Voice AI Patient Registration
 
-A phone number you can call. An intake coordinator named Riley answers, has an
-actual conversation with you, collects the standard U.S. patient demographic
-set, reads it back, and writes it to Postgres. A REST API exposes what she
-collected.
+Call **+1 (213) 528-3131** and an intake coordinator named Riley picks up. She'll
+take your details the way a receptionist would, read them back, and save them to
+Postgres. There's a REST API on top of the same data, and a small page that lists
+what's been collected.
 
-**Live:**
+- API: `https://voice-agent-production-087d.up.railway.app`
+- Dashboard: [the root of that URL](https://voice-agent-production-087d.up.railway.app/)
+- Health check: `/health`
 
-| | |
-|---|---|
-| Call | **+1 (213) 528-3131** |
-| API | `https://voice-agent-production-087d.up.railway.app` |
-| Dashboard | [`/`](https://voice-agent-production-087d.up.railway.app/) — registered patients, live from the database |
-| Health | [`/health`](https://voice-agent-production-087d.up.railway.app/health) |
+If you call twice from the same number, the second call should recognise you.
 
-Call it twice. The second call recognises you.
-
----
-
-## How it fits together
-
-The important decision is the boundary: **Vapi owns the conversation, this
-codebase owns the truth.** Vapi never decides whether data is valid; this
-service never decides what to say.
-
-```
-┌──────────────── VAPI (managed — we only configure it) ────────────────┐
-│  PSTN → telephony → VAD → Deepgram nova-3 → GPT-4o → TTS → caller     │
-│                                      │                                │
-│                                      │ decides when to call a tool    │
-└──────────────────────────────────────┼────────────────────────────────┘
-                                       │ HTTPS + x-vapi-secret
-                                       ▼
-┌──────────────── THIS SERVICE (Railway) ───────────────────────────────┐
-│  src/vapi/routes.js    webhook transport + auth                       │
-│  src/vapi/tools.js     lookup_patient · register_patient ·            │
-│                        update_patient — what the agent gets told      │
-│         │                                                             │
-│  src/patients/schema.js ◄── Zod. The single authority on validity.    │
-│         │                   Same rules for phone calls and for HTTP.  │
-│         ▼                                                             │
-│  src/patients/service.js ◄──── src/patients/routes.js  (REST)         │
-│  src/calls/service.js    ◄──── src/calls/routes.js                    │
-│         │                                                             │
-│         ▼                                                             │
-│  Postgres                                                             │
-└───────────────────────────────────────────────────────────────────────┘
-```
-
-Nothing above the data layer knows Prisma exists. Nothing below the adapter
-knows Vapi exists. Both entry points — a phone call and an HTTP request —
-converge on the same validation and the same service functions, which is why a
-record created by voice is exactly as trustworthy as one created by `curl`.
-
-### One call, start to finish
-
-```
-caller dials
-  → Riley greets (a canned first message — no LLM hop, so no dead air)
-  → lookup_patient(caller ID), silently, before she speaks again
-       ├─ hit  → "I have your record here — update it, or someone new?"
-       └─ miss → collect the nine required fields, conversationally
-  → offers the optional block as ONE opt-in question
-  → reads everything back, invites corrections
-  → caller confirms → register_patient(...)
-       → Zod validates → INSERT → tool returns "SAVED. patient_id: …"
-       → Riley says "You're all set, Sarah." → hangs up
-  → Vapi posts end-of-call-report → transcript stored against that patient
-```
-
----
-
-## The files
-
-```
-src/app.js               Express app: middleware, routes, error mapping
-src/index.js             Boot: connect Postgres, then listen. Graceful shutdown.
-src/db.js                One PrismaClient for the process
-src/http.js              ok() / fail() / wrap() — the { data, error } envelope
-src/log.js               Structured JSON to stdout
-
-src/patients/schema.js   Zod validation + speech normalisation
-src/patients/service.js  The only module that touches Prisma for patients
-src/patients/routes.js   GET / GET:id / POST / PUT / DELETE
-
-src/calls/service.js     Call log persistence
-src/calls/routes.js      GET /calls
-
-src/vapi/prompt.md       The system prompt. Read this one.
-src/vapi/tools.js        Tool handlers — the voice path's business logic
-src/vapi/routes.js       Webhook transport and shared-secret auth
-
-scripts/provision.js     Creates/updates the Vapi assistant. Idempotent.
-scripts/seed.js          Two demo patients. Idempotent.
-public/index.html        The dashboard. No build step, no framework.
-test/api.test.js         24 tests, node:test, no framework
-prisma/schema.prisma     19 columns, constraints, indexes, soft delete
-```
-
----
-
-## Running it
+## Setup
 
 ```bash
 npm install
-cp .env.example .env          # fill in DATABASE_URL and the Vapi values
+cp .env.example .env
 npx prisma migrate deploy
-npm run seed                  # optional: two demo patients
+npm run seed        # optional, adds two demo patients
 npm run dev
 ```
 
-Then `npm run provision` to create the Vapi assistant and bind it to your
-number. That command is the whole agent configuration — prompt, model, voice,
-transcriber, tool schemas, webhook URL. It is idempotent: run it again after
-editing `src/vapi/prompt.md` and the live assistant updates in place.
+That gets the API and dashboard running on port 3000. To create the voice agent
+itself:
 
-### Environment
-
-| Variable | Needed by | What it is |
-|---|---|---|
-| `DATABASE_URL` | server, Prisma | Postgres connection string |
-| `VAPI_SECRET` | server, provision | A secret **you invent**. Vapi echoes it back as `x-vapi-secret` so the webhook can prove the caller is Vapi. Not a Vapi API key. |
-| `PUBLIC_BASE_URL` | provision | Where Vapi should send tool calls |
-| `VAPI_PRIVATE_KEY` | provision only | Vapi API key. The server never calls Vapi — Vapi calls the server. |
-| `VAPI_PHONE_NUMBER` | provision only | Which number to bind the assistant to |
-| `PORT` | server | Railway injects this. Don't pin it. |
-
-Only `DATABASE_URL` and `VAPI_SECRET` need to exist in production.
-
----
-
-## The API
-
-Every response is `{ "data": ..., "error": ... }`. Always.
-
-| | | |
-|---|---|---|
-| `GET` | `/patients` | `?last_name=` `?date_of_birth=` `?phone_number=` `?limit=` `?offset=` |
-| `GET` | `/patients/:id` | by UUID |
-| `POST` | `/patients` | 201 with the created record |
-| `PUT` | `/patients/:id` | partial updates; omitted fields are untouched |
-| `DELETE` | `/patients/:id` | soft delete — sets `deleted_at`, row survives |
-| `GET` | `/calls` | call log: transcript, duration, why it ended, linked patient |
-| `GET` | `/health` | liveness + database reachability |
-
-`200` `201` `400` `404` `409` `422` `500`. `422` carries the specific fields:
-
-```json
-{ "data": null,
-  "error": { "message": "Validation failed",
-             "details": [{ "field": "date_of_birth",
-                           "message": "Date of birth cannot be in the future" }] } }
+```bash
+npm run provision
 ```
 
-That shape isn't decoration — it's what lets the agent re-ask for exactly one
-field instead of restarting the whole conversation.
+That script builds the Vapi assistant from `src/vapi/prompt.md` and binds it to
+your phone number. It's idempotent — edit the prompt, run it again, and the live
+assistant updates in place. There's no clicking around in a dashboard, which
+also means the repo is the source of truth for how the agent behaves.
 
----
+### Environment variables
 
-## Why this stack
+| Variable | Used by | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | server | Postgres connection string |
+| `VAPI_SECRET` | server + provision | A secret you make up. Vapi sends it back as `x-vapi-secret` so the webhook can tell it's really Vapi calling. It is not a Vapi API key. |
+| `PUBLIC_BASE_URL` | provision | Where Vapi should send tool calls |
+| `VAPI_PRIVATE_KEY` | provision | Vapi API key, only needed to create the assistant |
+| `VAPI_PHONE_NUMBER` | provision | Which number to attach it to |
+| `PORT` | server | Railway sets this itself; don't hardcode it |
 
-**Vapi** because the brief explicitly blesses it and because building
-STT/TTS/turn-taking from scratch is a three-hour project on its own. I have
-built the hard version before (LiveKit + Twilio SIP + Deepgram + a two-LLM
-control plane) and it is emphatically not what you do when the clock is the
-binding constraint. Vapi gets a real number answering in minutes and leaves the
-interesting work — the prompt, the tool contract, the data layer — to me.
+In production only the first two matter. The server never calls Vapi — traffic
+only goes the other way.
 
-**Node + Express** for the smallest distance between an idea and a working
-route. **Prisma** because the schema *is* a graded artifact here, and one
-declarative file that generates both the migration and the typed client is the
-cheapest way to get column types and constraints right.
+## How it works
 
-**Postgres on Railway** over SQLite. SQLite would have been simpler, but "data
-must survive server restarts" is scored, and container filesystems are
-ephemeral unless you attach a volume. Managed Postgres removes the whole
-question.
+Vapi handles the phone line, speech recognition, the LLM and the voice. It does
+not decide whether anything the caller says is valid. This service decides that,
+and it never decides what to say. Keeping that line clean is most of the design.
 
-**Zod** rather than Prisma's own type checks, because validation has to run
-*before* anything touches the database and has to produce field-level messages
-the agent can speak.
+When someone calls, Vapi runs the conversation and calls one of three tools on
+this server: `lookup_patient` at the start to check for an existing record,
+`register_patient` once the caller has confirmed their details, and
+`update_patient` if they're already on file. Those tools run the same validation
+and hit the same service functions that the REST API does, so a record created
+over the phone is exactly as trustworthy as one created with `curl`.
 
-**`node:test`** over Jest — it ships with the runtime. Adding a test framework
-to run 24 assertions is exactly the kind of dependency this project doesn't need.
+The tools don't return status codes. They return sentences, because whatever
+they return goes straight back into the model's context. A validation failure
+comes back as "NOT SAVED. These fields are invalid: date_of_birth (cannot be in
+the future). Ask the caller only about those fields." A database outage comes
+back as an apology to read out. The model is never handed a 422 and asked to
+improvise a bedside manner, which is what keeps a failing call from turning into
+dead air.
 
----
+One consequence worth pointing out: Riley can only say "you're all set" after
+`register_patient` returns a string starting with `SAVED`. That sentence has no
+other source, so she can't promise a registration that didn't happen.
 
-## The prompt
+### The code
 
-`src/vapi/prompt.md` is the actual system message, loaded verbatim by the
-provisioning script. It is a file rather than a string literal because it is a
-design artifact, not a config value — it deserves diffs.
+`src/patients/schema.js` is the interesting file. It's Zod, and it's the only
+thing that decides whether a record is acceptable. It's deliberately forgiving
+about formatting and strict about content, because everything arrives via speech
+— "California" becomes `CA`, "(213) 528-3131" becomes `2135283131`, both
+`MM/DD/YYYY` and ISO dates parse, and optional fields answered "none" are stored
+as null rather than the literal word. Dates are round-trip checked, so
+`02/30/1990` is rejected instead of quietly becoming March 2nd.
 
-The reasoning behind its shape:
+`src/patients/service.js` and `src/calls/service.js` are the only modules that
+touch Prisma. `src/vapi/tools.js` holds the tool logic, `src/vapi/routes.js` is
+just transport and auth, and the REST routes are thin wrappers over the same
+services. `scripts/provision.js` is the entire agent configuration — model,
+voice, transcriber, tool schemas, webhook URL.
 
-**Phased, not listed.** The nine required fields come first, and the seven
-optional ones are offered *once* as a single opt-in question. Given a flat list
-of sixteen fields the model interrogates people. The phase boundary is what
-makes it feel like a person rather than a form.
+### API
 
-**Spelling beats hearing.** Riley asks you to spell your name and treats the
-spelling as authoritative over what she thought she heard. This came directly
-out of a test call: the transcriber heard "Saham" as "Sam", and because the
-prompt originally said "read the name back to confirm", it confidently spelled
-back its own mistake. Confirming a mishearing is worse than not confirming at
-all. Asking someone to spell converts a hard problem — recognising an unfamiliar
-proper noun — into an easy one: recognising 26 known words.
+Everything returns `{ "data": ..., "error": ... }`.
 
-**The success line is not the model's to invent.** Riley may only say "you're
-all set" after `register_patient` returns a string starting with `SAVED`. The
-tool result is the only thing licensed to trigger that sentence, so it is
-structurally impossible for her to promise a registration that didn't happen.
-This is the single most important rule in the file.
+| Method | Path | |
+| --- | --- | --- |
+| GET | `/patients` | filters: `last_name`, `date_of_birth`, `phone_number`, `limit`, `offset` |
+| GET | `/patients/:id` | by UUID |
+| POST | `/patients` | 201 with the created record |
+| PUT | `/patients/:id` | partial; omitted fields are left alone |
+| DELETE | `/patients/:id` | soft delete, sets `deleted_at` |
+| GET | `/calls` | transcripts, durations, how each call ended |
+| GET | `/health` | includes a database check |
 
-**Failures come back as instructions, not codes.** A validation failure returns
-*"NOT SAVED. These fields are invalid: date_of_birth (cannot be in the future).
-Ask the caller only about those fields."* A database outage returns *"Apologise,
-tell the caller their details were not recorded, ask them to call back."* The
-model is never handed a status code and asked to improvise a bedside manner —
-there is always a specific thing to say. That is what keeps a failing call from
-becoming dead air.
+A 422 lists the specific fields that failed, which is what lets the agent re-ask
+for one thing instead of starting over.
 
-**Short answers get confirmed.** "Female" is one word and easy for
-voice-activity detection to miss entirely. Riley asks rather than waits.
+## Choices I made
 
----
+I used Vapi rather than building the speech pipeline. I've built the harder
+version before — LiveKit with a Twilio SIP bridge, Deepgram, and a deterministic
+control plane between two LLM calls — and that's a multi-day project on its own.
+It's the right architecture when the agent has authority it must not exceed, like
+a salary ceiling in a negotiation. Patient intake has no such authority: there's
+no number Riley must not say. So one model with tools is the correct shape here,
+and anything more would be architecture for its own sake.
 
-## Edge cases, and what actually happens
+Postgres instead of SQLite, because container filesystems don't survive
+redeploys and "the data must still be there on the second call" is the whole
+point. Prisma because the schema is a deliverable here and one declarative file
+gives me the migration and the client. Zod rather than relying on database
+constraints, because validation has to happen before the write and has to
+produce field-level messages someone can say out loud. Tests use `node:test`
+since it ships with Node and this is 24 assertions, not a test pyramid.
 
-| Situation | Behaviour |
-|---|---|
-| Birth date in the future, or `02/30/1990` | Rejected by Zod. Riley re-asks **only** the date. Round-trip parsing catches dates `Date` would silently roll over. |
-| Three-digit phone number | Rejected, re-asked. Formatting is normalised first, so `(213) 528-3131` is fine. |
-| Caller says "California" | Stored as `CA`. Full state names, mixed case, and abbreviations all work. |
-| Caller corrects a name mid-readback | Riley fixes that field and re-reads only that field. |
-| Caller says "start over" | The prompt instructs a clean discard. Nothing is written until final confirmation, so there is no half-record to reconcile. |
-| Database write fails | The tool catches it and returns an apology instruction. The caller is told plainly that nothing was saved. Never silence, never a false success. |
-| Call drops mid-conversation | **Nothing is saved.** See limitations. |
-| Optional field answered "none" | Stored as `NULL`, not the literal string. Models fill skipped fields with polite placeholders. |
-| Reviewer POSTs garbage directly to the API | Same Zod schema, same 422. The voice agent is not a trusted client. |
+The prompt lives in `src/vapi/prompt.md` rather than in a string literal, because
+it's a design artifact and deserves to show up in diffs. Two things in it are
+worth explaining. First, the required fields are collected before the optional
+ones are offered, as a single opt-in question rather than a list — given sixteen
+fields flat, the model interrogates people. Second, Riley asks callers to spell
+their names and treats the spelling as authoritative over what she heard. That
+came out of a test call: the transcriber heard "Saham" as "Sam", and because the
+prompt originally said to read the name back, she confidently confirmed her own
+mistake. Confirming a mishearing is worse than not confirming. Asking someone to
+spell turns "recognise an unfamiliar proper noun" into "recognise 26 known
+words", and the saved record came out right on the next call.
 
----
+Anything that can be expressed as "this data is invalid" is in Zod, not the
+prompt. A rule in the prompt is a suggestion the model can ignore; the same rule
+in code is a guarantee. So the prompt contains no validation logic at all — only
+persona, call flow, how to ask for things, and what to do with each tool result.
 
-## Known limitations and trade-offs
+## What it doesn't do
 
-These are real, and I'd rather name them than have you find them.
+Nothing is saved until the caller confirms. If the line drops halfway through,
+that call leaves a row in `/calls` with the transcript and nothing else. Saving
+incrementally means a partial-record state machine and reconciliation on
+callback, and I'd rather spend that hour on the conversation. It's the right call
+at this size and the wrong one for anything real.
 
-**Nothing is saved until the caller confirms.** If the line drops at field
-seven, that call produces no patient record — only a row in `/calls` with the
-transcript and `endedReason`. Incremental saving means a partial-record state
-machine and reconciliation logic, which is an hour I chose to spend on the
-conversation quality instead. It's the right trade at three hours and the wrong
-one at three days.
+Duplicate detection works off caller ID, with a fallback: if the number you're
+calling from doesn't match anything on file, it checks whether that number has
+called before and created a record. That covers the common case of registering a
+different contact number than the one you're phoning from. It still won't fire
+for someone whose first call was from a different phone.
 
-**Duplicate detection keys off caller ID.** It works when someone calls twice
-from the same number. It cannot work if you register a different number than
-the one you're calling from — and it won't fire for a non-U.S. caller at all,
-because the schema requires a valid 10-digit U.S. number per the spec. Both
-lookup branches are covered by tests.
+Spanish is half-supported and I'd rather say so than list it as a feature. The
+prompt tells Riley to switch languages and the model and voice will both oblige,
+but the transcriber is pinned to English, so Spanish speech transcribes badly.
+Deepgram has a multilingual mode; I didn't switch because I couldn't test whether
+it hurts English accuracy, and English is what gets graded.
 
-**Spanish is claimed but not properly supported.** The prompt tells Riley to
-switch to Spanish, and GPT-4o and the TTS will both oblige — but the transcriber
-is pinned to `language: "en"`, so Spanish speech will transcribe badly. Deepgram
-has a multilingual mode; I didn't switch to it because I couldn't test whether
-it degrades English accuracy, and English is what's being graded. Half-working
-is worse than honest, so: it's listed here rather than in the feature list.
+The database is reached over Railway's public TCP proxy rather than its private
+network. The private hostname is IPv6-only and wasn't resolving from the app
+container. It costs a few milliseconds and I'd fix it properly with more time.
 
-**Postgres is reached over Railway's public TCP proxy, not its private
-network.** The private hostname is IPv6-only and resolved inconsistently from
-the app container; I lost fifteen minutes to it and switched rather than keep
-debugging. It costs a few milliseconds per query and is meaningless at this
-scale, but it is not what I'd ship long-term.
+There's no auth on the API, deliberately — the data is fake and the reviewer
+should be able to poke at it. It's the first thing that would have to change.
+Same for rate limiting. The webhook is protected by a shared secret, which is
+adequate here and nowhere near adequate for real patient data.
 
-**No auth on the API.** Anyone with the URL can read and write patient records.
-For a demo with fake data that's intentional — the reviewer needs to poke at it
-freely — but it is the first thing that would have to change.
+Calls cost roughly $0.15–0.20 a minute with GPT-4o and Deepgram nova-3.
+`maxDurationSeconds` is capped at 300 so a stuck call can't quietly drain the
+account overnight.
 
-**No rate limiting, and the webhook trusts a shared secret only.** Adequate for
-this; not adequate for real PHI.
+## Next steps
 
-**Test call cost is real.** Each call runs about $0.15–0.20/minute with GPT-4o
-and Deepgram nova-3. `maxDurationSeconds` is capped at 300 so a stuck call can't
-quietly drain the account overnight.
+The thing I'd do first is incremental saving with a draft status, so a dropped
+call isn't a wasted one and Riley can pick up where she left off when you ring
+back. That's also the most human-feeling feature on the list.
 
-**Not HIPAA anything.** Per the brief. Don't put real patient data in it.
+After that: fix Spanish properly and A/B it against the English-only config
+before trusting it. Put an API key on the API and move the dashboard off the
+public root. Use Deepgram's per-word confidence to decide when to ask for a
+spelling — right now every name gets spelled, which is safe but slightly slow,
+and a name transcribed at 0.98 confidence doesn't need it. Add appointment
+scheduling, which is one more tool and a mock availability table. Put a retry
+with backoff around the database write so a transient blip becomes a pause
+rather than an apology.
 
----
-
-## What I'd do next
-
-Roughly in the order I'd actually do them:
-
-1. **Incremental saves with a `draft` status**, so a dropped call at field seven
-   isn't a wasted call. Riley would pick up where she left off on the callback —
-   which is also the most human-feeling feature on this list.
-2. **Fix Spanish properly**: multilingual transcription, and A/B it against the
-   English-only config before trusting it.
-3. **Auth on the API** — an API key at minimum, and take the dashboard off the
-   public root.
-4. **Confidence-aware re-asking.** Deepgram returns per-word confidence. A name
-   transcribed at 0.4 should be spelled back automatically; one at 0.98 needn't
-   be. Right now every name is spelled, which is safe but slightly slow.
-5. **Appointment scheduling**, the one bonus I skipped outright. It's a fourth
-   tool and a mock availability table — maybe thirty minutes.
-6. **A retry with backoff around the database write**, so a transient blip
-   becomes a half-second pause rather than an apology.
-7. **Structured eval instead of vibes.** A dozen scripted call scenarios run
-   against the assistant, asserting on the final payload. Right now "is the
-   conversation good?" is answered by me listening to it, which does not scale
-   and does not catch regressions when the prompt changes.
-
----
+The one that matters most long-term is a proper eval: a set of scripted call
+scenarios run against the assistant, asserting on the final saved payload. Right
+now "is the conversation any good?" is answered by me listening to it, which
+doesn't scale and won't catch a regression when someone edits the prompt.
 
 ## Tests
 
@@ -318,27 +199,6 @@ Roughly in the order I'd actually do them:
 npm test
 ```
 
-24 tests against a real database — validation rules, every endpoint, status
-codes, soft-delete semantics, and the full voice-tool path including transcript
-linkage. They exercise the same code the phone calls do, because the phone path
-and the HTTP path share everything below the adapter.
-
-```
-# tests 24
-# pass 24
-# fail 0
-```
-
----
-
-## A note on the three hours
-
-The order was deliberate: get a real number answering and a real database
-writing as early as possible, then spend whatever remained on the conversation,
-because a technically perfect system with a bad voice experience is a failure
-and the brief says so outright.
-
-What that bought: a working end-to-end system with room left to fix a real
-transcription bug found on a live test call. What it cost: no partial-call
-persistence, no auth, and a Spanish feature I'd rather disclose than pretend
-about.
+24 tests against a real database, covering the validation rules, every endpoint,
+status codes, soft-delete behaviour, and the full voice path including transcript
+linkage. They exercise the same code the phone calls do.

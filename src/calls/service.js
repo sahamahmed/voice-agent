@@ -28,10 +28,11 @@ export const toApi = (c) => ({
   created_at: c.createdAt.toISOString(),
 });
 
-export const findPatientIdByCaller = async (callerNumber) => {
-  const previous = await prisma.callLog.findFirst({
+export const findPatientIdsByCaller = async (callerNumber) => {
+  const previous = await prisma.callLog.findMany({
     where: { callerNumber, patientId: { not: null } },
     orderBy: { createdAt: "desc" },
+    take: 10,
   });
-  return previous?.patientId ?? null;
+  return previous.map((c) => c.patientId);
 };
