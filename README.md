@@ -1,15 +1,25 @@
 # Voice AI Patient Registration
 
-Call **+1 (213) 528-3131** and an intake coordinator named Riley picks up. he'll
+Call **+1 (213) 528-3131** and an intake coordinator named Riley picks up. He'll
 take your details the way a receptionist would, read them back, and save them to
 Postgres. There's a REST API on top of the same data, and a small page that lists
 what's been collected.
 
 - API: `https://voice-agent-production-087d.up.railway.app`
-- Dashboard: [the root of that URL](https://voice-agent-production-087d.up.railway.app/)
+- Dashboard: (https://voice-agent-production-087d.up.railway.app/)
 - Health check: `/health`
 
 If you call twice from the same number, the second call should recognise you.
+
+No credentials or API keys are needed to test any of this — the endpoints are
+open on purpose so you can poke at them. To see a call land in the database:
+
+```bash
+curl https://voice-agent-production-087d.up.railway.app/patients
+```
+
+`/calls` has the transcript of every call, including ones that ended without a
+registration.
 
 ## Setup
 
@@ -130,8 +140,8 @@ ones are offered, as a single opt-in question rather than a list — given sixte
 fields flat, the model interrogates people. Second, Riley asks callers to spell
 their names and treats the spelling as authoritative over what he heard. That
 came out of a test call: the transcriber heard "Saham" as "Sam", and because the
-prompt originally said to read the name back, he confidently confirmed her own
-mistake. Confirming a mihearing is worse than not confirming. Asking someone to
+prompt originally said to read the name back, he confidently confirmed his own
+mistake. Confirming a mishearing is worse than not confirming. Asking someone to
 spell turns "recognise an unfamiliar proper noun" into "recognise 26 known
 words", and the saved record came out right on the next call.
 

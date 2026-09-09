@@ -59,9 +59,12 @@
     <table>
       <thead>
         <tr>
-          <th>Name</th><th>DOB</th><th>Sex</th><th>Phone</th>
-          <th>Address</th><th>Insurance</th><th>Language</th>
-          <th>Registered</th><th>Patient ID</th>
+          <th>First</th><th>Last</th><th>DOB</th><th>Sex</th>
+          <th>Phone</th><th>Email</th>
+          <th>Address</th><th>Apt / Unit</th><th>City</th><th>State</th><th>ZIP</th>
+          <th>Insurance</th><th>Member ID</th><th>Language</th>
+          <th>Emergency contact</th><th>Emergency phone</th>
+          <th>Registered</th><th>Updated</th><th>Patient ID</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -73,9 +76,6 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const cell = (v) => (v == null || v === "" ? '<span class="none">—</span>' : esc(v));
-
-const address = (p) =>
-  [p.address_line_1, p.address_line_2, `${p.city}, ${p.state} ${p.zip_code}`].filter(Boolean).join(", ");
 
 const when = (iso) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -105,14 +105,24 @@ async function load() {
     const { patients, total } = json.data;
     $("rows").innerHTML = patients.map((p) => `
       <tr>
-        <td><strong>${esc(p.first_name)} ${esc(p.last_name)}</strong></td>
+        <td><strong>${esc(p.first_name)}</strong></td>
+        <td><strong>${esc(p.last_name)}</strong></td>
         <td>${cell(p.date_of_birth)}</td>
         <td>${cell(p.sex)}</td>
         <td>${cell(p.phone_number)}</td>
-        <td>${cell(address(p))}</td>
+        <td>${cell(p.email)}</td>
+        <td>${cell(p.address_line_1)}</td>
+        <td>${cell(p.address_line_2)}</td>
+        <td>${cell(p.city)}</td>
+        <td>${cell(p.state)}</td>
+        <td>${cell(p.zip_code)}</td>
         <td>${cell(p.insurance_provider)}</td>
+        <td>${cell(p.insurance_member_id)}</td>
         <td>${cell(p.preferred_language)}</td>
+        <td>${cell(p.emergency_contact_name)}</td>
+        <td>${cell(p.emergency_contact_phone)}</td>
         <td>${cell(when(p.created_at))}</td>
+        <td>${cell(when(p.updated_at))}</td>
         <td class="id">${esc(p.patient_id)}</td>
       </tr>`).join("");
 
