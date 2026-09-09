@@ -19,7 +19,8 @@ curl https://voice-agent-production-087d.up.railway.app/patients
 ```
 
 `/calls` has the transcript of every call, including ones that ended without a
-registration.
+registration. The dashboard shows both: registered patients on top, and every
+call underneath with its duration, how it ended, and an expandable transcript.
 
 ## Setup
 

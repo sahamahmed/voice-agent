@@ -37,6 +37,15 @@
   .none { color:var(--muted); font-style:italic; }
   .status { padding:14px 32px; color:var(--muted); font-size:13px; }
   .status[data-error] { color:var(--warn); }
+  h2 { margin:36px 0 4px; font-size:15px; letter-spacing:-0.01em; }
+  h2 + .hint { color:var(--muted); font-size:12.5px; margin:0 0 12px; }
+  details summary { cursor:pointer; color:var(--accent); font-weight:500; }
+  details[open] summary { margin-bottom:8px; }
+  details pre { margin:0; padding:12px 14px; background:var(--bg); border:1px solid var(--line);
+                border-radius:7px; white-space:pre-wrap; font-size:12.5px; line-height:1.6;
+                max-height:340px; overflow-y:auto; max-width:760px; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11.5px;
+         border:1px solid var(--line); color:var(--muted); }
 </style>
 </head>
 <body>
@@ -55,6 +64,8 @@
 <div class="status" id="status">Loading…</div>
 
 <main>
+  <h2 style="margin-top:0">Patients</h2>
+  <p class="hint">Scroll sideways for insurance, emergency contact and IDs.</p>
   <div class="wrap">
     <table>
       <thead>
@@ -68,6 +79,20 @@
         </tr>
       </thead>
       <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <h2>Recent calls</h2>
+  <p class="hint" id="callStatus">Loading…</p>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>When</th><th>Caller</th><th>Length</th><th>How it ended</th>
+          <th>Registered?</th><th>Transcript</th>
+        </tr>
+      </thead>
+      <tbody id="callRows"></tbody>
     </table>
   </div>
 </main>
@@ -135,12 +160,46 @@ async function load() {
   }
 }
 
+const seconds = (s) => (s == null ? "—" : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+
+async function loadCalls() {
+  try {
+    const res = await fetch("/calls?limit=25");
+    const json = await res.json();
+    if (json.error) throw new Error(json.error.message);
+
+    const { calls } = json.data;
+    $("callStatus").textContent = calls.length
+      ? `${calls.length} call${calls.length === 1 ? "" : "s"}. Every call is logged, including ones that ended without a registration.`
+      : "No calls yet. Call the number and this fills in.";
+
+    $("callRows").innerHTML = calls.map((c) => `
+      <tr>
+        <td>${cell(when(c.created_at))}</td>
+        <td>${cell(c.caller_number)}</td>
+        <td>${seconds(c.duration_seconds)}</td>
+        <td><span class="tag">${cell(c.ended_reason)}</span></td>
+        <td>${c.patient_id ? `<span class="id">${esc(c.patient_id)}</span>` : '<span class="none">not saved</span>'}</td>
+        <td>${
+          c.transcript
+            ? `<details><summary>View</summary><pre>${esc(c.transcript)}</pre>${
+                c.summary ? `<p class="hint"><strong>Summary:</strong> ${esc(c.summary)}</p>` : ""
+              }</details>`
+            : '<span class="none">—</span>'
+        }</td>
+      </tr>`).join("");
+  } catch (err) {
+    $("callStatus").textContent = "Could not load calls: " + err.message;
+  }
+}
+
 $("go").onclick = load;
 $("clear").onclick = () => { $("q").value = ""; $("p").value = ""; load(); };
 for (const id of ["q", "p"]) {
   $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
 }
 load();
+loadCalls();
 </script>
 </body>
 </html>
