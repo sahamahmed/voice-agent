@@ -16,18 +16,24 @@ export const UNAVAILABLE =
   "The system is temporarily unavailable and nothing was saved. Apologise, tell the caller " +
   "their details were not recorded, and ask them to call back in a few minutes.";
 
+const found = (existing) =>
+  `EXISTING RECORD FOUND. patient_id: ${existing.patientId}. On file: ${describe(existing)}. ` +
+  `Greet them by name, say you already have their record, and ask whether they want to update it ` +
+  `or register as a new patient.`;
+
 const lookupPatient = async ({ phone_number }) => {
   if (!phone_number) return "No phone number available. Continue as a new registration.";
 
   const existing = await patients.findByPhone(normalisePhone(phone_number));
-  if (!existing) return "No existing record. Continue as a new registration.";
+  if (existing) return found(existing);
 
-  return (
-    `EXISTING RECORD FOUND. patient_id: ${existing.patientId}. On file: ${describe(existing)}. ` +
-    `Greet them by name, say you already have their record, and ask whether they want to update it ` +
-    `or register as a new patient.`
-  );
+  const previousId = await calls.findPatientIdByCaller(phone_number);
+  const previous = previousId ? await patients.getPatient(previousId) : null;
+  if (previous) return found(previous);
+
+  return "No existing record. Continue as a new registration.";
 };
+
 
 const registerPatient = async (args, { callId }) => {
   const parsed = createPatientSchema.safeParse(args ?? {});

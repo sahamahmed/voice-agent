@@ -86,6 +86,7 @@ const buildTools = (serverUrl, secret) => [
     serverUrl,
     secret,
   ),
+  { type: "endCall" },
   tool(
     "update_patient",
     "Update an existing patient record found by lookup_patient. Send patient_id plus only the fields that changed.",

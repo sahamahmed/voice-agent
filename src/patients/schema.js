@@ -89,7 +89,7 @@ const optionalText = (max) =>
     })
     .refine((v) => v === undefined || v.length <= max, `Must be ${max} characters or fewer`);
 
-export const createPatientSchema = z.object({
+const patientFields = z.object({
   first_name: name("First name"),
   last_name: name("Last name"),
   date_of_birth: dateOfBirth,
@@ -125,7 +125,18 @@ export const createPatientSchema = z.object({
   call_transcript: optionalText(100000),
 });
 
-export const updatePatientSchema = createPatientSchema.partial();
+const pairedInsurance = (data, ctx) => {
+  if (data.insurance_member_id && !data.insurance_provider) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["insurance_provider"],
+      message: "Insurance provider is required when a member ID is given",
+    });
+  }
+};
+
+export const createPatientSchema = patientFields.superRefine(pairedInsurance);
+export const updatePatientSchema = patientFields.partial().superRefine(pairedInsurance);
 
 export const listQuerySchema = z.object({
   last_name: z.string().trim().min(1).optional(),

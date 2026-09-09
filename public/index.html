@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Patient Registry</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e3e3df; --accent: #2f5d50; --warn: #9a3f2f;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16161a; --panel:#1e1e23; --ink:#ececea; --muted:#9a9a95; --line:#2e2e35; --accent:#7fbfa9; --warn:#e08b76; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { padding:28px 32px 20px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 4px; font-size:20px; letter-spacing:-0.01em; }
+  .sub { color:var(--muted); font-size:13px; }
+  .bar { display:flex; gap:10px; padding:16px 32px; flex-wrap:wrap; align-items:center; }
+  input, button { font:inherit; padding:8px 12px; border:1px solid var(--line);
+                  border-radius:7px; background:var(--panel); color:var(--ink); }
+  input { min-width:200px; }
+  button { cursor:pointer; border-color:var(--accent); color:var(--accent); font-weight:500; }
+  button:hover { background:var(--accent); color:var(--panel); }
+  main { padding:0 32px 48px; }
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th { text-align:left; font-weight:600; font-size:11px; letter-spacing:0.06em;
+       text-transform:uppercase; color:var(--muted); padding:12px 14px;
+       border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:12px 14px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tr:last-child td { border-bottom:0; }
+  .id { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11.5px; color:var(--muted); }
+  .none { color:var(--muted); font-style:italic; }
+  .status { padding:14px 32px; color:var(--muted); font-size:13px; }
+  .status[data-error] { color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Patient Registry</h1>
+  <div class="sub">Records collected by the voice intake agent, read live from the database.</div>
+</header>
+
+<div class="bar">
+  <input id="q" placeholder="Filter by last name" autocomplete="off" />
+  <input id="p" placeholder="Filter by phone" autocomplete="off" />
+  <button id="go">Search</button>
+  <button id="clear">Clear</button>
+</div>
+
+<div class="status" id="status">Loading…</div>
+
+<main>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th><th>DOB</th><th>Sex</th><th>Phone</th>
+          <th>Address</th><th>Insurance</th><th>Language</th>
+          <th>Registered</th><th>Patient ID</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const cell = (v) => (v == null || v === "" ? '<span class="none">—</span>' : esc(v));
+
+const address = (p) =>
+  [p.address_line_1, p.address_line_2, `${p.city}, ${p.state} ${p.zip_code}`].filter(Boolean).join(", ");
+
+const when = (iso) =>
+  new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+async function load() {
+  const params = new URLSearchParams();
+  if ($("q").value.trim()) params.set("last_name", $("q").value.trim());
+  if ($("p").value.trim()) params.set("phone_number", $("p").value.trim());
+
+  $("status").removeAttribute("data-error");
+  $("status").textContent = "Loading…";
+
+  try {
+    const res = await fetch("/patients?" + params);
+    const type = res.headers.get("content-type") || "";
+    if (!type.includes("application/json")) {
+      throw new Error(
+        location.protocol === "file:"
+          ? "this page was opened as a file. Serve it from the API instead — http://localhost:3000/"
+          : `the server returned ${res.status} ${type || "an unknown type"} instead of JSON`,
+      );
+    }
+
+    const json = await res.json();
+    if (json.error) throw new Error(json.error.message);
+
+    const { patients, total } = json.data;
+    $("rows").innerHTML = patients.map((p) => `
+      <tr>
+        <td><strong>${esc(p.first_name)} ${esc(p.last_name)}</strong></td>
+        <td>${cell(p.date_of_birth)}</td>
+        <td>${cell(p.sex)}</td>
+        <td>${cell(p.phone_number)}</td>
+        <td>${cell(address(p))}</td>
+        <td>${cell(p.insurance_provider)}</td>
+        <td>${cell(p.preferred_language)}</td>
+        <td>${cell(when(p.created_at))}</td>
+        <td class="id">${esc(p.patient_id)}</td>
+      </tr>`).join("");
+
+    $("status").textContent = total === 0
+      ? "No patients match that filter."
+      : `${total} patient${total === 1 ? "" : "s"} registered.`;
+  } catch (err) {
+    $("status").setAttribute("data-error", "");
+    $("status").textContent = "Could not load patients: " + err.message;
+  }
+}
+
+$("go").onclick = load;
+$("clear").onclick = () => { $("q").value = ""; $("p").value = ""; load(); };
+for (const id of ["q", "p"]) {
+  $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+}
+load();
+</script>
+</body>
+</html>
