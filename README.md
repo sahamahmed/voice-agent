@@ -1,6 +1,6 @@
 # Voice AI Patient Registration
 
-Call **+1 (213) 528-3131** and an intake coordinator named Riley picks up. She'll
+Call **+1 (213) 528-3131** and an intake coordinator named Riley picks up. he'll
 take your details the way a receptionist would, read them back, and save them to
 Postgres. There's a REST API on top of the same data, and a small page that lists
 what's been collected.
@@ -70,7 +70,7 @@ dead air.
 
 One consequence worth pointing out: Riley can only say "you're all set" after
 `register_patient` returns a string starting with `SAVED`. That sentence has no
-other source, so she can't promise a registration that didn't happen.
+other source, so he can't promise a registration that didn't happen.
 
 ### The code
 
@@ -128,10 +128,10 @@ it's a design artifact and deserves to show up in diffs. Two things in it are
 worth explaining. First, the required fields are collected before the optional
 ones are offered, as a single opt-in question rather than a list — given sixteen
 fields flat, the model interrogates people. Second, Riley asks callers to spell
-their names and treats the spelling as authoritative over what she heard. That
+their names and treats the spelling as authoritative over what he heard. That
 came out of a test call: the transcriber heard "Saham" as "Sam", and because the
-prompt originally said to read the name back, she confidently confirmed her own
-mistake. Confirming a mishearing is worse than not confirming. Asking someone to
+prompt originally said to read the name back, he confidently confirmed her own
+mistake. Confirming a mihearing is worse than not confirming. Asking someone to
 spell turns "recognise an unfamiliar proper noun" into "recognise 26 known
 words", and the saved record came out right on the next call.
 
@@ -176,7 +176,7 @@ account overnight.
 ## Next steps
 
 The thing I'd do first is incremental saving with a draft status, so a dropped
-call isn't a wasted one and Riley can pick up where she left off when you ring
+call isn't a wasted one and Riley can pick up where he left off when you ring
 back. That's also the most human-feeling feature on the list.
 
 After that: fix Spanish properly and A/B it against the English-only config
