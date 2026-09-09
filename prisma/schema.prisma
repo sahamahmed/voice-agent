@@ -52,3 +52,17 @@ model Patient {
   @@index([lastName])
   @@map("patients")
 }
+
+model CallLog {
+  vapiCallId   String    @id @map("vapi_call_id")
+  callerNumber String?   @map("caller_number")
+  endedReason  String?   @map("ended_reason")
+  durationSecs Int?      @map("duration_seconds")
+  summary      String?
+  transcript   String?
+  patientId    String?   @map("patient_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt])
+  @@map("call_logs")
+}

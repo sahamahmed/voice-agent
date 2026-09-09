@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { createPatientSchema, updatePatientSchema, formatIssues, normalisePhone } from "../patients/schema.js";
 import * as service from "../patients/service.js";
+import * as calls from "../calls/service.js";
 import { log } from "../log.js";
 
 export const vapiRouter = Router();
@@ -44,6 +45,7 @@ const handlers = {
 
     const patient = await service.createPatient({ ...parsed.data, vapi_call_id: callId });
     log.info("registration.saved", { call_id: callId, patient: service.toApi(patient) });
+    if (callId) await calls.linkPatient(callId, patient.patientId);
 
     return (
       `SAVED. patient_id: ${patient.patientId}. Tell ${patient.firstName} they are all set ` +
@@ -61,6 +63,7 @@ const handlers = {
     if (!patient) return "No patient with that patient_id. Register them as a new patient instead.";
 
     log.info("registration.updated", { call_id: callId, patient: service.toApi(patient) });
+    if (callId) await calls.linkPatient(callId, patient.patientId);
     return `UPDATED. Tell ${patient.firstName} their information is up to date, then end the call.`;
   },
 };
@@ -89,16 +92,28 @@ const runToolCall = async (call, callId) => {
 
 const onEndOfCall = async (message) => {
   const callId = message.call?.id;
-  const transcript = message.transcript ?? message.artifact?.transcript;
+  if (!callId) return;
+
+  const transcript = message.transcript ?? message.artifact?.transcript ?? null;
+  const durationSecs = Math.round(message.durationSeconds ?? 0) || null;
 
   log.info("call.ended", {
     call_id: callId,
     reason: message.endedReason,
-    duration_seconds: message.durationSeconds,
+    duration_seconds: durationSecs,
     transcript,
   });
 
-  if (callId && transcript) await service.attachTranscript(callId, transcript);
+  await calls.recordCall({
+    vapiCallId: callId,
+    callerNumber: message.call?.customer?.number ?? null,
+    endedReason: message.endedReason ?? null,
+    durationSecs,
+    summary: message.summary ?? message.analysis?.summary ?? null,
+    transcript,
+  });
+
+  if (transcript) await service.attachTranscript(callId, transcript);
 };
 
 vapiRouter.post("/webhook", async (req, res) => {
@@ -115,8 +130,8 @@ vapiRouter.post("/webhook", async (req, res) => {
 
     if (message.type !== "tool-calls") return res.json({ received: true });
 
-    const calls = message.toolCallList ?? message.toolCalls ?? [];
-    const results = await Promise.all(calls.map((call) => runToolCall(call, callId)));
+    const toolCalls = message.toolCallList ?? message.toolCalls ?? [];
+    const results = await Promise.all(toolCalls.map((call) => runToolCall(call, callId)));
     return res.json({ results });
   } catch (error) {
     log.error("webhook.failed", { call_id: callId, type: message.type, error: error.message });

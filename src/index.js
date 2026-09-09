@@ -1,5 +1,6 @@
 import express from "express";
 import { patientsRouter } from "./patients/routes.js";
+import { callsRouter } from "./calls/routes.js";
 import { vapiRouter } from "./vapi/routes.js";
 import { fail } from "./http.js";
 import { log } from "./log.js";
@@ -19,6 +20,7 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/patients", patientsRouter);
+app.use("/calls", callsRouter);
 app.use("/vapi", vapiRouter);
 
 app.use((_req, res) => fail(res, 404, "Not found"));
